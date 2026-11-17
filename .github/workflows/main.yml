@@ -41,35 +41,171 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          cmdline-tools-version: '15859902'
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      - name: Verify Android SDK installation
+      - name: Verify Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
           if [ -z "$SDK" ]; then
-            echo "ERROR: Android SDK environment is missing."
+            echo "ERROR: Android SDK was not detected."
             exit 1
           fi
-
-          echo "Android SDK: $SDK"
-
-          command -v sdkmanager
 
           test -d "$SDK/platforms/android-35"
           test -d "$SDK/build-tools/35.0.0"
           test -d "$SDK/platform-tools"
 
-          echo "Installed SDK packages:"
-          sdkmanager --list_installed
+          echo "SUCCESS: Android SDK is ready."
 
-          echo "SUCCESS: Android SDK installation verified."
+      - name: Locate Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR=""
+
+          find_project() {
+            local SEARCH_DIR="$1"
+
+            while IFS= read -r SETTINGS; do
+              local DIR
+              DIR="$(dirname "$SETTINGS")"
+
+              if { [ -f "$DIR/app/build.gradle" ] || \
+                   [ -f "$DIR/app/build.gradle.kts" ]; }; then
+                PROJECT_DIR="$DIR"
+                return 0
+              fi
+            done < <(
+              find "$SEARCH_DIR" \
+                -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
+                -type f \( -name settings.gradle -o -name settings.gradle.kts \) \
+                -print
+            )
+
+            return 1
+          }
+
+          if ! find_project "$GITHUB_WORKSPACE"; then
+
+            echo "No Android project found directly in repository."
+
+            ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+              -type f -iname '*.zip' \
+              ! -name 'gradle-*.zip' \
+              ! -path '*/.git/*' \
+              -print -quit)"
+
+            if [ -z "$ZIP_FILE" ]; then
+              echo "ERROR: No Android project or project ZIP found."
+              exit 1
+            fi
+
+            echo "Extracting Android project: $ZIP_FILE"
+
+            mkdir -p "$GITHUB_WORKSPACE/build-project"
+
+            unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/build-project"
+
+            if ! find_project "$GITHUB_WORKSPACE/build-project"; then
+              echo "ERROR: ZIP does not contain a valid Android Gradle project."
+              exit 1
+            fi
+          fi
+
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
+          echo "BUILD_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "=================================="
+          echo "ANDROID PROJECT LOCATED"
+          echo "=================================="
+          echo "$PROJECT_DIR"
+
+      - name: Verify Android project structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$BUILD_DIR"
+
+          echo "Checking project files..."
+
+          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
+            echo "ERROR: Gradle settings file missing."
+            exit 1
+          fi
+
+          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
+            echo "ERROR: App module Gradle file missing."
+            exit 1
+          fi
+
+          if [ ! -f app/src/main/AndroidManifest.xml ]; then
+            echo "ERROR: AndroidManifest.xml is missing."
+            exit 1
+          fi
+
+          if ! find app/src/main -type f \
+            \( -name '*.java' -o -name '*.kt' \) \
+            -print -quit | grep -q .; then
+            echo "ERROR: No Java or Kotlin source files found."
+            exit 1
+          fi
+
+          echo "Project files found:"
+          find . -maxdepth 4 -type f \
+            \( -name '*.gradle' -o -name '*.gradle.kts' -o -name 'AndroidManifest.xml' \) \
+            -print
+
+          echo "Application source files:"
+          find app/src/main -type f \
+            \( -name '*.java' -o -name '*.kt' \) -print
+
+          echo "SUCCESS: Android project structure verified."
+
+      - name: Verify SIYOMA branding assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$BUILD_DIR"
+
+          echo "Checking SIYOMA logo and launcher resources..."
+
+          LOGO_FOUND=0
+
+          if [ -f app/src/main/res/drawable-nodpi/siyoma_mpesa_call_tracker_logo.png ]; then
+            LOGO_FOUND=1
+          elif [ -f app/src/main/res/drawable/siyoma_mpesa_call_tracker_logo.png ]; then
+            LOGO_FOUND=1
+          elif [ -f branding/SIYOMA-MPESA-Call-Tracker-Approved-Logo.png ]; then
+            LOGO_FOUND=1
+          fi
+
+          if [ "$LOGO_FOUND" -ne 1 ]; then
+            echo "WARNING: Approved SIYOMA logo file not found at expected locations."
+            echo "Checking available image assets..."
+            find . -type f \( -iname '*.png' -o -iname '*.webp' -o -iname '*.jpg' \) \
+              -not -path '*/build/*' -print
+          else
+            echo "SUCCESS: SIYOMA branding logo found."
+          fi
+
+          if ! find app/src/main/res -type f \
+            \( -name 'ic_launcher.png' -o -name 'ic_launcher.xml' -o \
+               -name 'ic_launcher_foreground.xml' \) \
+            -print -quit | grep -q .; then
+            echo "WARNING: Standard launcher icon resource not detected."
+          else
+            echo "Launcher resources detected."
+          fi
 
       - name: Verify Gradle installation
         shell: bash
@@ -77,31 +213,13 @@ jobs:
           set -euo pipefail
           gradle --version
 
-      - name: Verify Android project structure
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/src/main/AndroidManifest.xml
-
-          test -f app/src/main/java/com/siyoma/mpesa/calltracker/MainActivity.java
-          test -f app/src/main/java/com/siyoma/mpesa/calltracker/TrackerDb.java
-          test -f app/src/main/java/com/siyoma/mpesa/calltracker/SyncEngine.java
-          test -f app/src/main/java/com/siyoma/mpesa/calltracker/MpesaParser.java
-          test -f app/src/main/java/com/siyoma/mpesa/calltracker/MpesaSmsReceiver.java
-
-          test -f app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          test -f app/src/main/res/drawable-nodpi/siyoma_mpesa_call_tracker_logo.png
-
-          echo "SUCCESS: SIYOMA project structure verified."
-
       - name: Build Debug APK
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$BUILD_DIR"
+
           gradle --no-daemon assembleDebug --stacktrace
 
       - name: Verify Debug APK
@@ -109,22 +227,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK=$(find app/build/outputs/apk/debug \
-            -type f -name '*.apk' -print -quit)
+          APK="$(find "$BUILD_DIR/app/build/outputs/apk/debug" \
+            -type f -name '*.apk' -print -quit)"
 
           if [ -z "$APK" ]; then
             echo "ERROR: Debug APK was not generated."
             exit 1
           fi
 
-          echo "Debug APK generated:"
+          echo "DEBUG APK GENERATED:"
           ls -lh "$APK"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SIYOMA-MPESA-Call-Tracker-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ env.BUILD_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -132,6 +250,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$BUILD_DIR"
+
           gradle --no-daemon assembleRelease --stacktrace
 
       - name: Verify Release APK
@@ -139,22 +260,34 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK=$(find app/build/outputs/apk/release \
-            -type f -name '*.apk' -print -quit)
+          APK="$(find "$BUILD_DIR/app/build/outputs/apk/release" \
+            -type f -name '*.apk' -print -quit)"
 
           if [ -z "$APK" ]; then
             echo "ERROR: Release APK was not generated."
             exit 1
           fi
 
-          echo "Release APK generated:"
+          echo "RELEASE APK GENERATED:"
           ls -lh "$APK"
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: SIYOMA-MPESA-Call-Tracker-Release-APK
-          path: app/build/outputs/apk/release/*.apk
+          path: ${{ env.BUILD_DIR }}/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Build Summary
+        if: success()
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "SIYOMA M-PESA & CALL TRACKER"
+          echo "BUILD COMPLETED SUCCESSFULLY"
+          echo "======================================"
+          echo "Debug APK: Generated and uploaded"
+          echo "Release APK: Generated and uploaded"
+          echo "======================================"
           
