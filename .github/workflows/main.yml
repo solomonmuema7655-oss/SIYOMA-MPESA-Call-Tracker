@@ -1,4 +1,3 @@
-
 name: Build SIYOMA M-PESA & Call Tracker APKs
 
 on:
@@ -17,34 +16,61 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # ============================================================
+      # 2. JAVA 17
+      # ============================================================
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
+
+      # ============================================================
+      # 3. GRADLE 8.7
+      # ============================================================
       - name: Install Gradle 8.7
         shell: bash
         run: |
           set -euo pipefail
 
-          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip \
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.7-bin.zip \
             -O /tmp/gradle-8.7-bin.zip
 
           unzip -q /tmp/gradle-8.7-bin.zip -d /opt
 
           echo "/opt/gradle-8.7/bin" >> "$GITHUB_PATH"
 
+          echo "Gradle 8.7 installed."
+
+
+      # ============================================================
+      # 4. ANDROID SDK
+      # ============================================================
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
+
+      # ============================================================
+      # 5. VERIFY SDK
+      # ============================================================
       - name: Verify Android SDK
         shell: bash
         run: |
@@ -57,12 +83,22 @@ jobs:
             exit 1
           fi
 
+          echo "ANDROID SDK: $SDK"
+
           test -d "$SDK/platforms/android-35"
           test -d "$SDK/build-tools/35.0.0"
           test -d "$SDK/platform-tools"
 
-          echo "SUCCESS: Android SDK is ready."
+          echo "Android SDK verification successful."
 
+
+      # ============================================================
+      # 6. LOCATE THE ANDROID PROJECT
+      #
+      # Supports either:
+      #   A) Android project directly in repository
+      #   B) Repaired Android project stored inside a ZIP
+      # ============================================================
       - name: Locate Android project
         shell: bash
         run: |
@@ -74,60 +110,116 @@ jobs:
             local SEARCH_DIR="$1"
 
             while IFS= read -r SETTINGS; do
+
               local DIR
               DIR="$(dirname "$SETTINGS")"
 
-              if { [ -f "$DIR/app/build.gradle" ] || \
-                   [ -f "$DIR/app/build.gradle.kts" ]; }; then
+              if [ -f "$DIR/app/build.gradle" ] || \
+                 [ -f "$DIR/app/build.gradle.kts" ]; then
+
                 PROJECT_DIR="$DIR"
                 return 0
+
               fi
+
             done < <(
               find "$SEARCH_DIR" \
-                -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
-                -type f \( -name settings.gradle -o -name settings.gradle.kts \) \
+                -type d \( \
+                  -name .git \
+                  -o -name .gradle \
+                  -o -name build \
+                \) -prune \
+                -o \
+                -type f \( \
+                  -name settings.gradle \
+                  -o -name settings.gradle.kts \
+                \) \
                 -print
             )
 
             return 1
           }
 
-          if ! find_project "$GITHUB_WORKSPACE"; then
 
-            echo "No Android project found directly in repository."
+          # ----------------------------------------------------------
+          # First: look for a normal Android project
+          # ----------------------------------------------------------
+          if find_project "$GITHUB_WORKSPACE"; then
+
+            echo "Android project found directly in repository."
+
+          else
+
+            echo "No Android project found directly."
+
+            # --------------------------------------------------------
+            # Find project ZIP
+            # --------------------------------------------------------
+            ZIP_FILE=""
 
             ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-              -type f -iname '*.zip' \
+              -type f \
+              -iname '*.zip' \
               ! -name 'gradle-*.zip' \
               ! -path '*/.git/*' \
-              -print -quit)"
+              -print | head -n 1)"
 
             if [ -z "$ZIP_FILE" ]; then
-              echo "ERROR: No Android project or project ZIP found."
+              echo "ERROR: No Android project ZIP was found."
               exit 1
             fi
 
-            echo "Extracting Android project: $ZIP_FILE"
+            echo "Android project ZIP:"
+            echo "$ZIP_FILE"
+
+
+            # --------------------------------------------------------
+            # Extract project
+            # --------------------------------------------------------
+            rm -rf "$GITHUB_WORKSPACE/build-project"
 
             mkdir -p "$GITHUB_WORKSPACE/build-project"
 
-            unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/build-project"
+            unzip -q \
+              "$ZIP_FILE" \
+              -d "$GITHUB_WORKSPACE/build-project"
 
+
+            # --------------------------------------------------------
+            # Find Android project inside extracted ZIP
+            # --------------------------------------------------------
             if ! find_project "$GITHUB_WORKSPACE/build-project"; then
-              echo "ERROR: ZIP does not contain a valid Android Gradle project."
+
+              echo "ERROR: Extracted ZIP does not contain a valid Android project."
+
+              echo "Extracted files:"
+              find "$GITHUB_WORKSPACE/build-project" \
+                -maxdepth 5 \
+                -type f \
+                -print
+
               exit 1
+
             fi
+
           fi
+
 
           PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
           echo "BUILD_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "=================================="
-          echo "ANDROID PROJECT LOCATED"
-          echo "=================================="
+          echo ""
+          echo "=============================================="
+          echo "ANDROID PROJECT FOUND"
+          echo "=============================================="
           echo "$PROJECT_DIR"
+          echo "=============================================="
 
+
+      # ============================================================
+      # 7. VERIFY PROJECT STRUCTURE
+      # ============================================================
       - name: Verify Android project structure
         shell: bash
         run: |
@@ -135,84 +227,157 @@ jobs:
 
           cd "$BUILD_DIR"
 
-          echo "Checking project files..."
+          echo "Checking project..."
 
-          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
-            echo "ERROR: Gradle settings file missing."
+          if [ ! -f settings.gradle ] && \
+             [ ! -f settings.gradle.kts ]; then
+
+            echo "ERROR: settings.gradle/settings.gradle.kts missing."
             exit 1
+
           fi
 
-          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
-            echo "ERROR: App module Gradle file missing."
+
+          if [ ! -f app/build.gradle ] && \
+             [ ! -f app/build.gradle.kts ]; then
+
+            echo "ERROR: app Gradle file missing."
             exit 1
+
           fi
+
 
           if [ ! -f app/src/main/AndroidManifest.xml ]; then
-            echo "ERROR: AndroidManifest.xml is missing."
+
+            echo "ERROR: AndroidManifest.xml missing."
             exit 1
+
           fi
 
-          if ! find app/src/main -type f \
+
+          if ! find app/src/main \
+            -type f \
             \( -name '*.java' -o -name '*.kt' \) \
             -print -quit | grep -q .; then
-            echo "ERROR: No Java or Kotlin source files found."
+
+            echo "ERROR: No Java/Kotlin source files found."
             exit 1
+
           fi
 
-          echo "Project files found:"
-          find . -maxdepth 4 -type f \
-            \( -name '*.gradle' -o -name '*.gradle.kts' -o -name 'AndroidManifest.xml' \) \
+
+          echo ""
+          echo "Project structure:"
+          echo "----------------------------------------------"
+
+          find . \
+            -maxdepth 5 \
+            -type f \
+            \( \
+              -name '*.gradle' \
+              -o -name '*.gradle.kts' \
+              -o -name 'AndroidManifest.xml' \
+            \) \
             -print
 
+          echo ""
           echo "Application source files:"
-          find app/src/main -type f \
-            \( -name '*.java' -o -name '*.kt' \) -print
+          echo "----------------------------------------------"
 
-          echo "SUCCESS: Android project structure verified."
+          find app/src/main \
+            -type f \
+            \( -name '*.java' -o -name '*.kt' \) \
+            -print
 
-      - name: Verify SIYOMA branding assets
+          echo ""
+          echo "Project structure verified."
+
+
+      # ============================================================
+      # 8. VERIFY SIYOMA BRANDING
+      # ============================================================
+      - name: Verify SIYOMA branding
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$BUILD_DIR"
 
-          echo "Checking SIYOMA logo and launcher resources..."
-
           LOGO_FOUND=0
 
-          if [ -f app/src/main/res/drawable-nodpi/siyoma_mpesa_call_tracker_logo.png ]; then
+
+          if [ -f \
+            app/src/main/res/drawable-nodpi/siyoma_mpesa_call_tracker_logo.png
+          ]; then
+
             LOGO_FOUND=1
-          elif [ -f app/src/main/res/drawable/siyoma_mpesa_call_tracker_logo.png ]; then
+
+          elif [ -f \
+            app/src/main/res/drawable/siyoma_mpesa_call_tracker_logo.png
+          ]; then
+
             LOGO_FOUND=1
-          elif [ -f branding/SIYOMA-MPESA-Call-Tracker-Approved-Logo.png ]; then
+
+          elif [ -f \
+            branding/SIYOMA-MPESA-Call-Tracker-Approved-Logo.png
+          ]; then
+
             LOGO_FOUND=1
+
           fi
+
 
           if [ "$LOGO_FOUND" -ne 1 ]; then
-            echo "WARNING: Approved SIYOMA logo file not found at expected locations."
-            echo "Checking available image assets..."
-            find . -type f \( -iname '*.png' -o -iname '*.webp' -o -iname '*.jpg' \) \
-              -not -path '*/build/*' -print
-          else
-            echo "SUCCESS: SIYOMA branding logo found."
+
+            echo "ERROR: Approved SIYOMA logo was not found."
+
+            echo "Available image files:"
+
+            find . \
+              -type f \
+              \( \
+                -iname '*.png' \
+                -o -iname '*.webp' \
+                -o -iname '*.jpg' \
+              \) \
+              ! -path '*/build/*' \
+              -print
+
+            exit 1
+
           fi
 
-          if ! find app/src/main/res -type f \
-            \( -name 'ic_launcher.png' -o -name 'ic_launcher.xml' -o \
-               -name 'ic_launcher_foreground.xml' \) \
-            -print -quit | grep -q .; then
-            echo "WARNING: Standard launcher icon resource not detected."
-          else
-            echo "Launcher resources detected."
-          fi
 
-      - name: Verify Gradle installation
+          echo "SUCCESS: SIYOMA approved logo found."
+
+
+      # ============================================================
+      # 9. VERIFY GRADLE
+      # ============================================================
+      - name: Verify Gradle 8.7
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --version
 
+
+      # ============================================================
+      # 10. CLEAN PROJECT
+      # ============================================================
+      - name: Clean Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$BUILD_DIR"
+
+          gradle --no-daemon clean
+
+
+      # ============================================================
+      # 11. BUILD DEBUG APK
+      # ============================================================
       - name: Build Debug APK
         shell: bash
         run: |
@@ -220,32 +385,66 @@ jobs:
 
           cd "$BUILD_DIR"
 
-          gradle --no-daemon assembleDebug --stacktrace
+          gradle \
+            --no-daemon \
+            assembleDebug \
+            --stacktrace
 
+
+      # ============================================================
+      # 12. VERIFY DEBUG APK
+      # ============================================================
       - name: Verify Debug APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find "$BUILD_DIR/app/build/outputs/apk/debug" \
-            -type f -name '*.apk' -print -quit)"
+          APK_DIR="$BUILD_DIR/app/build/outputs/apk/debug"
+
+          APK="$(find "$APK_DIR" \
+            -type f \
+            -name '*.apk' \
+            -print -quit 2>/dev/null || true)"
+
 
           if [ -z "$APK" ]; then
+
             echo "ERROR: Debug APK was not generated."
+
+            find "$BUILD_DIR/app/build/outputs" \
+              -type f \
+              -print 2>/dev/null || true
+
             exit 1
+
           fi
 
-          echo "DEBUG APK GENERATED:"
+
+          echo ""
+          echo "=============================================="
+          echo "DEBUG APK GENERATED"
+          echo "=============================================="
+
           ls -lh "$APK"
 
+          echo "=============================================="
+
+
+      # ============================================================
+      # 13. UPLOAD DEBUG APK
+      # ============================================================
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SIYOMA-MPESA-Call-Tracker-Debug-APK
           path: ${{ env.BUILD_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
+
+      # ============================================================
+      # 14. BUILD RELEASE APK
+      # ============================================================
       - name: Build Release APK
         shell: bash
         run: |
@@ -253,41 +452,92 @@ jobs:
 
           cd "$BUILD_DIR"
 
-          gradle --no-daemon assembleRelease --stacktrace
+          gradle \
+            --no-daemon \
+            assembleRelease \
+            --stacktrace
 
+
+      # ============================================================
+      # 15. VERIFY RELEASE APK
+      # ============================================================
       - name: Verify Release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find "$BUILD_DIR/app/build/outputs/apk/release" \
-            -type f -name '*.apk' -print -quit)"
+          APK_DIR="$BUILD_DIR/app/build/outputs/apk/release"
+
+          APK="$(find "$APK_DIR" \
+            -type f \
+            -name '*.apk' \
+            -print -quit 2>/dev/null || true)"
+
 
           if [ -z "$APK" ]; then
+
             echo "ERROR: Release APK was not generated."
+
+            find "$BUILD_DIR/app/build/outputs" \
+              -type f \
+              -print 2>/dev/null || true
+
             exit 1
+
           fi
 
-          echo "RELEASE APK GENERATED:"
+
+          echo ""
+          echo "=============================================="
+          echo "RELEASE APK GENERATED"
+          echo "=============================================="
+
           ls -lh "$APK"
 
+          echo "=============================================="
+
+
+      # ============================================================
+      # 16. UPLOAD RELEASE APK
+      # ============================================================
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: SIYOMA-MPESA-Call-Tracker-Release-APK
           path: ${{ env.BUILD_DIR }}/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      - name: Build Summary
+
+      # ============================================================
+      # 17. SHOW BUILD OUTPUTS
+      # ============================================================
+      - name: Show final APK outputs
         if: success()
         shell: bash
         run: |
-          echo "======================================"
+          set -euo pipefail
+
+          echo ""
+          echo "================================================"
           echo "SIYOMA M-PESA & CALL TRACKER"
+          echo "================================================"
+
+          echo ""
+          echo "DEBUG APK:"
+          find "$BUILD_DIR/app/build/outputs/apk/debug" \
+            -type f \
+            -name '*.apk' \
+            -exec ls -lh {} \;
+
+          echo ""
+          echo "RELEASE APK:"
+          find "$BUILD_DIR/app/build/outputs/apk/release" \
+            -type f \
+            -name '*.apk' \
+            -exec ls -lh {} \;
+
+          echo ""
+          echo "================================================"
           echo "BUILD COMPLETED SUCCESSFULLY"
-          echo "======================================"
-          echo "Debug APK: Generated and uploaded"
-          echo "Release APK: Generated and uploaded"
-          echo "======================================"
-          
+          echo "================================================"
