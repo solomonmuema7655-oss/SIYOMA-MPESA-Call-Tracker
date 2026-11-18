@@ -56,17 +56,14 @@ jobs:
 
 
       # ============================================================
-      # 4. ANDROID SDK
+      # 4. SET UP ANDROID SDK
       # ============================================================
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
 
       # ============================================================
@@ -84,18 +81,29 @@ jobs:
             exit 1
           fi
 
-          echo "Android SDK:"
+          echo "ANDROID SDK:"
           echo "$SDK"
 
-          test -d "$SDK/platforms/android-35"
-          test -d "$SDK/build-tools/35.0.0"
-          test -d "$SDK/platform-tools"
+          if [ ! -d "$SDK/platforms/android-35" ]; then
+            echo "ERROR: Android API 35 platform is missing."
+            exit 1
+          fi
+
+          if [ ! -d "$SDK/build-tools/35.0.0" ]; then
+            echo "ERROR: Android Build Tools 35.0.0 are missing."
+            exit 1
+          fi
+
+          if [ ! -d "$SDK/platform-tools" ]; then
+            echo "ERROR: Android Platform Tools are missing."
+            exit 1
+          fi
 
           echo "Android SDK verification successful."
 
 
       # ============================================================
-      # 6. LOCATE AND EXTRACT ANDROID PROJECT
+      # 6. LOCATE ANDROID PROJECT
       # ============================================================
       - name: Locate Android project
         shell: bash
@@ -140,7 +148,7 @@ jobs:
 
 
           # ----------------------------------------------------------
-          # First check for a normal project directly in repository
+          # Check whether project already exists directly
           # ----------------------------------------------------------
           if find_project "$GITHUB_WORKSPACE"; then
 
@@ -153,7 +161,7 @@ jobs:
 
 
             # --------------------------------------------------------
-            # Find the project ZIP
+            # Locate ZIP
             # --------------------------------------------------------
             ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
               -type f \
@@ -170,7 +178,7 @@ jobs:
               echo ""
               echo "Repository contents:"
               find "$GITHUB_WORKSPACE" \
-                -maxdepth 4 \
+                -maxdepth 5 \
                 -type f \
                 -print
 
@@ -185,7 +193,7 @@ jobs:
 
 
             # --------------------------------------------------------
-            # Extract
+            # Extract ZIP
             # --------------------------------------------------------
             rm -rf "$GITHUB_WORKSPACE/build-project"
 
@@ -201,12 +209,12 @@ jobs:
             # --------------------------------------------------------
             if ! find_project "$GITHUB_WORKSPACE/build-project"; then
 
-              echo "ERROR: ZIP does not contain a valid Android project."
+              echo "ERROR: ZIP does not contain a valid Android Gradle project."
 
               echo ""
               echo "Extracted contents:"
               find "$GITHUB_WORKSPACE/build-project" \
-                -maxdepth 6 \
+                -maxdepth 7 \
                 -type f \
                 -print
 
@@ -243,45 +251,57 @@ jobs:
           echo "Checking Android project..."
 
 
+          # ----------------------------------------------------------
+          # settings.gradle
+          # ----------------------------------------------------------
           if [ ! -f settings.gradle ] && \
              [ ! -f settings.gradle.kts ]; then
 
-            echo "ERROR: settings.gradle missing."
+            echo "ERROR: settings.gradle or settings.gradle.kts is missing."
             exit 1
 
           fi
 
 
+          # ----------------------------------------------------------
+          # App Gradle file
+          # ----------------------------------------------------------
           if [ ! -f app/build.gradle ] && \
              [ ! -f app/build.gradle.kts ]; then
 
-            echo "ERROR: app/build.gradle missing."
+            echo "ERROR: app/build.gradle or app/build.gradle.kts is missing."
             exit 1
 
           fi
 
 
+          # ----------------------------------------------------------
+          # Manifest
+          # ----------------------------------------------------------
           if [ ! -f app/src/main/AndroidManifest.xml ]; then
 
-            echo "ERROR: AndroidManifest.xml missing."
+            echo "ERROR: AndroidManifest.xml is missing."
             exit 1
 
           fi
 
 
+          # ----------------------------------------------------------
+          # Java/Kotlin source
+          # ----------------------------------------------------------
           if ! find app/src/main \
             -type f \
             \( -name '*.java' -o -name '*.kt' \) \
             -print -quit | grep -q .; then
 
-            echo "ERROR: No Java/Kotlin source files found."
+            echo "ERROR: No Java or Kotlin source files found."
             exit 1
 
           fi
 
 
           echo ""
-          echo "Android project files:"
+          echo "Gradle files:"
           echo "------------------------------------------------"
 
           find . \
@@ -290,7 +310,6 @@ jobs:
             \( \
               -name '*.gradle' \
               -o -name '*.gradle.kts' \
-              -o -name 'AndroidManifest.xml' \
             \) \
             -print
 
@@ -306,11 +325,11 @@ jobs:
 
 
           echo ""
-          echo "Project structure verified."
+          echo "Android project structure verified."
 
 
       # ============================================================
-      # 8. VERIFY SIYOMA LOGO
+      # 8. VERIFY SIYOMA BRANDING
       # ============================================================
       - name: Verify SIYOMA branding
         shell: bash
@@ -345,7 +364,10 @@ jobs:
 
           if [ "$LOGO_FOUND" -ne 1 ]; then
 
-            echo "ERROR: SIYOMA approved logo was not found."
+            echo "ERROR: Approved SIYOMA logo was not found."
+
+            echo ""
+            echo "Available image assets:"
 
             find . \
               -type f \
@@ -353,6 +375,7 @@ jobs:
                 -iname '*.png' \
                 -o -iname '*.webp' \
                 -o -iname '*.jpg' \
+                -o -iname '*.jpeg' \
               \) \
               ! -path '*/build/*' \
               -print
@@ -362,13 +385,13 @@ jobs:
           fi
 
 
-          echo "SIYOMA approved logo found."
+          echo "SUCCESS: Approved SIYOMA logo found."
 
 
       # ============================================================
       # 9. VERIFY GRADLE
       # ============================================================
-      - name: Verify Gradle
+      - name: Verify Gradle 8.7
         shell: bash
         run: |
           set -euo pipefail
@@ -377,9 +400,9 @@ jobs:
 
 
       # ============================================================
-      # 10. CLEAN
+      # 10. CLEAN PROJECT
       # ============================================================
-      - name: Clean project
+      - name: Clean Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -427,6 +450,8 @@ jobs:
 
             echo "ERROR: Debug APK was not generated."
 
+            echo ""
+            echo "Build output:"
             find "$BUILD_DIR/app/build/outputs" \
               -type f \
               -print 2>/dev/null || true
@@ -437,8 +462,13 @@ jobs:
 
 
           echo ""
-          echo "DEBUG APK:"
+          echo "================================================"
+          echo "DEBUG APK GENERATED"
+          echo "================================================"
+
           ls -lh "$APK"
+
+          echo "================================================"
 
 
       # ============================================================
@@ -489,6 +519,8 @@ jobs:
 
             echo "ERROR: Release APK was not generated."
 
+            echo ""
+            echo "Build output:"
             find "$BUILD_DIR/app/build/outputs" \
               -type f \
               -print 2>/dev/null || true
@@ -499,8 +531,13 @@ jobs:
 
 
           echo ""
-          echo "RELEASE APK:"
+          echo "================================================"
+          echo "RELEASE APK GENERATED"
+          echo "================================================"
+
           ls -lh "$APK"
+
+          echo "================================================"
 
 
       # ============================================================
@@ -523,15 +560,13 @@ jobs:
         shell: bash
         run: |
           echo ""
-          echo "================================================"
-          echo "       SIYOMA M-PESA & CALL TRACKER"
-          echo "================================================"
+          echo "======================================================"
+          echo "        SIYOMA M-PESA & CALL TRACKER"
+          echo "======================================================"
           echo ""
           echo "BUILD COMPLETED SUCCESSFULLY"
           echo ""
-          echo "Debug APK:   GENERATED"
-          echo "Release APK: GENERATED"
+          echo "Debug APK:   GENERATED AND UPLOADED"
+          echo "Release APK: GENERATED AND UPLOADED"
           echo ""
-          echo "Both APKs have been uploaded as artifacts."
-          echo ""
-          echo "================================================"
+          echo "======================================================"
