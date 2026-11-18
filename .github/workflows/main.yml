@@ -18,7 +18,7 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. CHECKOUT
+      # 1. CHECKOUT REPOSITORY
       # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,11 +32,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
 
       # ============================================================
-      # 3. GRADLE 8.7
+      # 3. INSTALL GRADLE 8.7
       # ============================================================
       - name: Install Gradle 8.7
         shell: bash
@@ -47,11 +46,13 @@ jobs:
             https://services.gradle.org/distributions/gradle-8.7-bin.zip \
             -O /tmp/gradle-8.7-bin.zip
 
-          unzip -q /tmp/gradle-8.7-bin.zip -d /opt
+          unzip -q \
+            /tmp/gradle-8.7-bin.zip \
+            -d /opt
 
           echo "/opt/gradle-8.7/bin" >> "$GITHUB_PATH"
 
-          echo "Gradle 8.7 installed."
+          echo "Gradle 8.7 installed successfully."
 
 
       # ============================================================
@@ -69,7 +70,7 @@ jobs:
 
 
       # ============================================================
-      # 5. VERIFY SDK
+      # 5. VERIFY ANDROID SDK
       # ============================================================
       - name: Verify Android SDK
         shell: bash
@@ -83,7 +84,8 @@ jobs:
             exit 1
           fi
 
-          echo "ANDROID SDK: $SDK"
+          echo "Android SDK:"
+          echo "$SDK"
 
           test -d "$SDK/platforms/android-35"
           test -d "$SDK/build-tools/35.0.0"
@@ -93,11 +95,7 @@ jobs:
 
 
       # ============================================================
-      # 6. LOCATE THE ANDROID PROJECT
-      #
-      # Supports either:
-      #   A) Android project directly in repository
-      #   B) Repaired Android project stored inside a ZIP
+      # 6. LOCATE AND EXTRACT ANDROID PROJECT
       # ============================================================
       - name: Locate Android project
         shell: bash
@@ -142,7 +140,7 @@ jobs:
 
 
           # ----------------------------------------------------------
-          # First: look for a normal Android project
+          # First check for a normal project directly in repository
           # ----------------------------------------------------------
           if find_project "$GITHUB_WORKSPACE"; then
 
@@ -150,13 +148,13 @@ jobs:
 
           else
 
-            echo "No Android project found directly."
+            echo "Android project not found directly."
+            echo "Searching for Android project ZIP..."
+
 
             # --------------------------------------------------------
-            # Find project ZIP
+            # Find the project ZIP
             # --------------------------------------------------------
-            ZIP_FILE=""
-
             ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
               -type f \
               -iname '*.zip' \
@@ -164,17 +162,30 @@ jobs:
               ! -path '*/.git/*' \
               -print | head -n 1)"
 
+
             if [ -z "$ZIP_FILE" ]; then
-              echo "ERROR: No Android project ZIP was found."
+
+              echo "ERROR: No Android project ZIP found."
+
+              echo ""
+              echo "Repository contents:"
+              find "$GITHUB_WORKSPACE" \
+                -maxdepth 4 \
+                -type f \
+                -print
+
               exit 1
+
             fi
 
-            echo "Android project ZIP:"
+
+            echo ""
+            echo "Android project ZIP found:"
             echo "$ZIP_FILE"
 
 
             # --------------------------------------------------------
-            # Extract project
+            # Extract
             # --------------------------------------------------------
             rm -rf "$GITHUB_WORKSPACE/build-project"
 
@@ -186,15 +197,16 @@ jobs:
 
 
             # --------------------------------------------------------
-            # Find Android project inside extracted ZIP
+            # Locate extracted project
             # --------------------------------------------------------
             if ! find_project "$GITHUB_WORKSPACE/build-project"; then
 
-              echo "ERROR: Extracted ZIP does not contain a valid Android project."
+              echo "ERROR: ZIP does not contain a valid Android project."
 
-              echo "Extracted files:"
+              echo ""
+              echo "Extracted contents:"
               find "$GITHUB_WORKSPACE/build-project" \
-                -maxdepth 5 \
+                -maxdepth 6 \
                 -type f \
                 -print
 
@@ -209,12 +221,13 @@ jobs:
 
           echo "BUILD_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
+
           echo ""
-          echo "=============================================="
-          echo "ANDROID PROJECT FOUND"
-          echo "=============================================="
+          echo "================================================"
+          echo "ANDROID PROJECT LOCATED"
+          echo "================================================"
           echo "$PROJECT_DIR"
-          echo "=============================================="
+          echo "================================================"
 
 
       # ============================================================
@@ -227,12 +240,13 @@ jobs:
 
           cd "$BUILD_DIR"
 
-          echo "Checking project..."
+          echo "Checking Android project..."
+
 
           if [ ! -f settings.gradle ] && \
              [ ! -f settings.gradle.kts ]; then
 
-            echo "ERROR: settings.gradle/settings.gradle.kts missing."
+            echo "ERROR: settings.gradle missing."
             exit 1
 
           fi
@@ -241,7 +255,7 @@ jobs:
           if [ ! -f app/build.gradle ] && \
              [ ! -f app/build.gradle.kts ]; then
 
-            echo "ERROR: app Gradle file missing."
+            echo "ERROR: app/build.gradle missing."
             exit 1
 
           fi
@@ -267,8 +281,8 @@ jobs:
 
 
           echo ""
-          echo "Project structure:"
-          echo "----------------------------------------------"
+          echo "Android project files:"
+          echo "------------------------------------------------"
 
           find . \
             -maxdepth 5 \
@@ -280,21 +294,23 @@ jobs:
             \) \
             -print
 
+
           echo ""
-          echo "Application source files:"
-          echo "----------------------------------------------"
+          echo "Application source:"
+          echo "------------------------------------------------"
 
           find app/src/main \
             -type f \
             \( -name '*.java' -o -name '*.kt' \) \
             -print
 
+
           echo ""
           echo "Project structure verified."
 
 
       # ============================================================
-      # 8. VERIFY SIYOMA BRANDING
+      # 8. VERIFY SIYOMA LOGO
       # ============================================================
       - name: Verify SIYOMA branding
         shell: bash
@@ -329,9 +345,7 @@ jobs:
 
           if [ "$LOGO_FOUND" -ne 1 ]; then
 
-            echo "ERROR: Approved SIYOMA logo was not found."
-
-            echo "Available image files:"
+            echo "ERROR: SIYOMA approved logo was not found."
 
             find . \
               -type f \
@@ -348,13 +362,13 @@ jobs:
           fi
 
 
-          echo "SUCCESS: SIYOMA approved logo found."
+          echo "SIYOMA approved logo found."
 
 
       # ============================================================
       # 9. VERIFY GRADLE
       # ============================================================
-      - name: Verify Gradle 8.7
+      - name: Verify Gradle
         shell: bash
         run: |
           set -euo pipefail
@@ -363,16 +377,18 @@ jobs:
 
 
       # ============================================================
-      # 10. CLEAN PROJECT
+      # 10. CLEAN
       # ============================================================
-      - name: Clean Android project
+      - name: Clean project
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$BUILD_DIR"
 
-          gradle --no-daemon clean
+          gradle \
+            --no-daemon \
+            clean
 
 
       # ============================================================
@@ -421,13 +437,8 @@ jobs:
 
 
           echo ""
-          echo "=============================================="
-          echo "DEBUG APK GENERATED"
-          echo "=============================================="
-
+          echo "DEBUG APK:"
           ls -lh "$APK"
-
-          echo "=============================================="
 
 
       # ============================================================
@@ -488,13 +499,8 @@ jobs:
 
 
           echo ""
-          echo "=============================================="
-          echo "RELEASE APK GENERATED"
-          echo "=============================================="
-
+          echo "RELEASE APK:"
           ls -lh "$APK"
-
-          echo "=============================================="
 
 
       # ============================================================
@@ -510,34 +516,22 @@ jobs:
 
 
       # ============================================================
-      # 17. SHOW BUILD OUTPUTS
+      # 17. FINAL BUILD SUMMARY
       # ============================================================
-      - name: Show final APK outputs
+      - name: Build Summary
         if: success()
         shell: bash
         run: |
-          set -euo pipefail
-
           echo ""
           echo "================================================"
-          echo "SIYOMA M-PESA & CALL TRACKER"
+          echo "       SIYOMA M-PESA & CALL TRACKER"
           echo "================================================"
-
           echo ""
-          echo "DEBUG APK:"
-          find "$BUILD_DIR/app/build/outputs/apk/debug" \
-            -type f \
-            -name '*.apk' \
-            -exec ls -lh {} \;
-
-          echo ""
-          echo "RELEASE APK:"
-          find "$BUILD_DIR/app/build/outputs/apk/release" \
-            -type f \
-            -name '*.apk' \
-            -exec ls -lh {} \;
-
-          echo ""
-          echo "================================================"
           echo "BUILD COMPLETED SUCCESSFULLY"
+          echo ""
+          echo "Debug APK:   GENERATED"
+          echo "Release APK: GENERATED"
+          echo ""
+          echo "Both APKs have been uploaded as artifacts."
+          echo ""
           echo "================================================"
